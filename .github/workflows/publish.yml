@@ -7,8 +7,7 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -67,16 +66,9 @@ jobs:
           console.log('Prepared install folder from ' + output.dir);
           NODE
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+      - name: Publish installable plugin files
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          enablement: true
-
-      - name: Upload site
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-      - name: Deploy site
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
