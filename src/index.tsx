@@ -250,10 +250,16 @@ export function start() {
     const guildId = args?.[0] == null ? null : String(args[0]);
     if (!guildId || !Array.isArray(result)) return result;
     if (result.some((item: any) => item?.label === 'Server Info')) return result;
-    const InfoIcon = metro.findByName('InfoIcon') ?? metro.findByName('CircleInformationIcon');
+    const InfoIcon = metro.findByName('InfoIcon')
+      ?? metro.findByName('CircleInformationIcon')
+      ?? metro.findByName('InformationIcon');
+    // Discord's guild long-press menu uses IconComponent (not `icon`).
+    // Reuse a native menu icon as a guaranteed fallback if this client renamed InfoIcon.
+    const fallbackIcon = result.find((item: any) => /more options/i.test(String(item?.label)))?.IconComponent
+      ?? result.find((item: any) => item?.IconComponent)?.IconComponent;
     return [...result, {
       label: 'Server Info',
-      icon: InfoIcon,
+      IconComponent: InfoIcon ?? fallbackIcon,
       action: () => ActionSheets.openLazy(
         Promise.resolve({ default: ServerInfoSheet }),
         'server-info-actionsheet-' + guildId,
