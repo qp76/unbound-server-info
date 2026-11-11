@@ -1,112 +1,247 @@
 import { flux, metro, patcher } from '@unbound-app/api';
 
-type Guild = {
-  id: string;
-  name?: string;
-  icon?: string | null;
-  banner?: string | null;
-  description?: string | null;
-  ownerId?: string;
-  memberCount?: number;
-  approximateMemberCount?: number;
-  premiumTier?: number;
-  premiumSubscriberCount?: number;
-  vanityURLCode?: string | null;
-};
+type AnyStore = any;
+type Guild = any;
+type Friend = { id: string; username: string; globalName?: string | null; nick?: string | null };
 
 const h = React.createElement;
 const RN = metro.common.ReactNative;
+const ActionSheetModule = metro.findByProps('ActionSheet');
+const ActionSheet = ActionSheetModule?.ActionSheet ?? RN.View;
+const CloseButtonModule = metro.findByProps('ActionSheetCloseButton');
+const ActionSheetCloseButton = CloseButtonModule?.ActionSheetCloseButton;
+const SheetActions = metro.findByProps('hideActionSheet', 'openLazy') ?? metro.findByProps('hideActionSheet');
+const hideSheet = () => {
+  try { SheetActions?.hideActionSheet?.(); } catch {}
+};
+const getStore = (name: string): AnyStore => {
+  try { return flux.getStore(name); } catch { return undefined; }
+};
+const textColor = '#f2f3f5';
+const mutedColor = '#b5bac1';
+const panelColor = '#2b2d31';
+const lineColor = '#3f4248';
 
-function makeInfoSheet(guildId: string) {
-  return function ServerInfoSheet() {
-    const [guild, setGuild] = React.useState<Guild | undefined>(() =>
-      flux.getStore('Guild')?.getGuild?.(guildId)
-    );
-
-    React.useEffect(() => {
-      const store = flux.getStore('Guild');
-      const update = () => setGuild(store?.getGuild?.(guildId));
-      store?.addChangeListener?.(update);
-      update();
-      return () => store?.removeChangeListener?.(update);
-    }, []);
-
-    if (!guild) {
-      return h(RN.View, { style: { padding: 24 } },
-        h(RN.Text, { style: { color: '#fff', fontSize: 16 } }, 'Server information is unavailable.'));
-    }
-
-    const roles = flux.getStore('GuildRole')?.getSortedRoles?.(guildId);
-    const channels = flux.getStore('GuildChannel')?.getChannels?.(guildId);
-    const roleCount = Array.isArray(roles) ? roles.length : '—';
-    const channelCount = channels ? Object.values(channels).reduce((n: number, value: any) => n + (Array.isArray(value) ? value.length : 0), 0) : '—';
-    const createdAt = new Date(Number((BigInt(guildId) >> 22n) + 1420070400000n))
+function getCreatedDate(id: string) {
+  try {
+    return new Date(Number((BigInt(id) >> 22n) + 1420070400000n))
       .toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch { return '—'; }
+}
 
-    const text = (value: unknown) => value === null || value === undefined || value === '' ? '—' : String(value);
-    const row = (label: string, value: unknown) => h(RN.View, {
-      key: label,
-      style: { paddingVertical: 11, borderBottomWidth: 0.5, borderBottomColor: '#454950', flexDirection: 'row', justifyContent: 'space-between', gap: 12 }
-    },
-      h(RN.Text, { style: { color: '#b5bac1', fontSize: 14, flex: 1 } }, label),
-      h(RN.Text, { selectable: true, style: { color: '#f2f3f5', fontSize: 14, flex: 1, textAlign: 'right' } }, text(value))
+function openProfile(userId: string, guildId: string) {
+  try {
+    hideSheet();
+    const profile = metro.findByProps('openUserProfileModal', 'openUserProfile')
+      ?? metro.findByProps('showUserProfile');
+    if (profile?.openUserProfileModal) profile.openUserProfileModal({ userId, guildId });
+    else if (profile?.openUserProfile) profile.openUserProfile({ userId, guildId });
+    else profile?.showUserProfile?.({ userId, guildId });
+  } catch (error) {
+    logger.warn('Server Info: could not open profile', error);
+  }
+}
+
+async function loadGuildFriends(guildId: string): Promise<Friend[]> {
+  const relationships = getStore('RelationshipStore');
+  const members = getStore('GuildMemberStore');
+  const users = getStore('UserStore');
+  const dispatcher = metro.findByProps('subscribe', 'unsubscribe');
+  const actions = metro.findByProps('requestMembersById');
+  const ids: string[] = relationships?.getFriendIDs?.() ?? [];
+  if (!ids.length) return [];
+
+  try { actions?.requestMembersById?.(guildId, ids); } catch {}
+  if (dispatcher?.subscribe && dispatcher?.unsubscribe) {
+    await new Promise<void>((resolve) => {
+      let finished = false;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        try { dispatcher.unsubscribe('GUILD_MEMBERS_CHUNK', onChunk); } catch {}
+        resolve();
+      };
+      const onChunk = (data: any) => {
+        if (data?.guildId === guildId || data?.guild_id === guildId) done();
+      };
+      const timer = setTimeout(done, 1400);
+      try { dispatcher.subscribe('GUILD_MEMBERS_CHUNK', onChunk); } catch { done(); }
+    });
+  }
+
+  const guildMembers = members?.getMembers?.(guildId) ?? {};
+  return ids.map((id) => {
+    const member = guildMembers[id] ?? members?.getMember?.(guildId, id);
+    if (!member) return null;
+    const user = users?.getUser?.(id);
+    return {
+      id,
+      username: user?.username ?? 'Unknown user',
+      globalName: user?.globalName ?? null,
+      nick: member?.nick ?? null
+    };
+  }).filter(Boolean) as Friend[];
+}
+
+function InfoRow(label: string, value: any, onPress?: () => void, avatar?: string | null) {
+  return h(RN.TouchableOpacity, {
+    key: label,
+    disabled: !onPress,
+    onPress,
+    activeOpacity: onPress ? 0.7 : 1,
+    style: {
+      minHeight: 48, paddingVertical: 10, paddingHorizontal: 14,
+      borderBottomWidth: 0.5, borderBottomColor: lineColor,
+      flexDirection: 'row', alignItems: 'center', gap: 10
+    }
+  },
+    avatar ? h(RN.Image, { source: { uri: avatar }, style: { width: 30, height: 30, borderRadius: 15 } }) : null,
+    h(RN.View, { style: { flex: 1 } },
+      h(RN.Text, { style: { color: mutedColor, fontSize: 13 } }, label),
+      h(RN.Text, { style: { color: textColor, fontSize: 15, marginTop: 2 }, numberOfLines: 2 }, value == null || value === '' ? '—' : String(value))
+    ),
+    onPress ? h(RN.Text, { style: { color: '#949ba4', fontSize: 18 } }, '›') : null
+  );
+}
+
+function Section(title: string) {
+  return h(RN.Text, {
+    style: { color: '#949ba4', fontSize: 12, fontWeight: '700', letterSpacing: 0.5, paddingHorizontal: 14, paddingTop: 18, paddingBottom: 7 }
+  }, title);
+}
+
+function ServerInfoSheet({ guildId }: { guildId: string }) {
+  const [guild, setGuild] = React.useState<Guild>(() => getStore('GuildStore')?.getGuild?.(guildId) ?? getStore('Guild')?.getGuild?.(guildId));
+  const [friends, setFriends] = React.useState<Friend[]>([]);
+  const [friendsLoading, setFriendsLoading] = React.useState(true);
+  const [, refresh] = React.useReducer((n: number) => n + 1, 0);
+  const [ownerData, setOwnerData] = React.useState<any>(null);
+
+  React.useEffect(() => {
+    const names = ['GuildStore', 'Guild', 'GuildMemberStore', 'GuildRoleStore', 'GuildChannelStore', 'UserStore'];
+    const stores = names.map(getStore).filter(Boolean);
+    const update = () => {
+      setGuild(getStore('GuildStore')?.getGuild?.(guildId) ?? getStore('Guild')?.getGuild?.(guildId));
+      refresh();
+    };
+    stores.forEach((store: any) => store.addChangeListener?.(update));
+    return () => stores.forEach((store: any) => store.removeChangeListener?.(update));
+  }, [guildId]);
+
+  React.useEffect(() => {
+    let alive = true;
+    setFriendsLoading(true);
+    loadGuildFriends(guildId).then((items) => {
+      if (alive) { setFriends(items); setFriendsLoading(false); }
+    }).catch(() => { if (alive) setFriendsLoading(false); });
+    return () => { alive = false; };
+  }, [guildId]);
+
+  const ownerId = guild?.ownerId ?? guild?.owner_id;
+  React.useEffect(() => {
+    if (!ownerId) return;
+    const users = getStore('UserStore');
+    const cached = users?.getUser?.(ownerId);
+    if (cached) { setOwnerData(cached); return; }
+    let alive = true;
+    const api = metro.findByProps('get', 'post', 'patch', 'del');
+    api?.get?.({ url: '/users/' + ownerId }).then((res: any) => {
+      if (alive && res?.body) setOwnerData(res.body);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [ownerId]);
+
+  if (!guild) {
+    return h(ActionSheet, { style: { flex: 1, backgroundColor: panelColor } },
+      h(RN.View, { style: { flex: 1, minHeight: 220, backgroundColor: panelColor, justifyContent: 'center', alignItems: 'center', padding: 24 } },
+        h(RN.Text, { style: { color: textColor } }, 'Server information is unavailable.'),
+        h(RN.TouchableOpacity, { onPress: hideSheet, style: { padding: 14 } }, h(RN.Text, { style: { color: '#00a8fc' } }, 'Close'))
+      )
     );
+  }
 
-    const icon = guild.icon
-      ? 'https://cdn.discordapp.com/icons/' + guildId + '/' + guild.icon + (guild.icon.startsWith('a_') ? '.gif' : '.png') + '?size=128'
-      : undefined;
-    const banner = guild.banner
-      ? 'https://cdn.discordapp.com/banners/' + guildId + '/' + guild.banner + (guild.banner.startsWith('a_') ? '.gif' : '.png') + '?size=512'
-      : undefined;
+  const roles = getStore('GuildRoleStore')?.getSortedRoles?.(guildId) ?? getStore('GuildRole')?.getSortedRoles?.(guildId);
+  const channels = getStore('GuildChannelStore')?.getChannels?.(guildId) ?? getStore('GuildChannel')?.getChannels?.(guildId);
+  const channelCount = channels ? Object.values(channels).reduce((total: number, item: any) => total + (Array.isArray(item) ? item.length : 1), 0) : null;
+  const memberStore = getStore('GuildMemberStore');
+  const memberCountStore = metro.findByProps('getMemberCount', 'getOnlineCount');
+  const countsStore = getStore('GuildHeaderCountsStore') ?? memberCountStore;
+  const memberCount = memberCountStore?.getMemberCount?.(guildId) ?? guild.memberCount ?? guild.approximateMemberCount ?? memberStore?.getMemberIds?.(guildId)?.length;
+  const onlineCount = countsStore?.getOnlineCount?.(guildId);
+  const owner = ownerData ?? getStore('UserStore')?.getUser?.(ownerId);
+  const ownerName = owner?.globalName ?? owner?.global_name ?? owner?.username ?? (ownerId ? 'User ' + ownerId.slice(0, 6) : 'Unavailable');
+  const ownerAvatar = owner?.avatar && ownerId
+    ? 'https://cdn.discordapp.com/avatars/' + ownerId + '/' + owner.avatar + '.' + (owner.avatar.startsWith('a_') ? 'gif' : 'png') + '?size=64'
+    : null;
+  const icon = guild.icon ? 'https://cdn.discordapp.com/icons/' + guildId + '/' + guild.icon + '.' + (guild.icon.startsWith('a_') ? 'gif' : 'png') + '?size=128' : null;
+  const banner = guild.banner ? 'https://cdn.discordapp.com/banners/' + guildId + '/' + guild.banner + '.' + (guild.banner.startsWith('a_') ? 'gif' : 'png') + '?size=512' : null;
 
-    return h(RN.ScrollView, { style: { maxHeight: 620, paddingHorizontal: 18 } },
-      h(RN.View, { style: { paddingTop: 18, paddingBottom: 14, alignItems: 'center' } },
-        banner ? h(RN.Image, { source: { uri: banner }, style: { width: '100%', height: 105, borderRadius: 12, marginBottom: 14 } }) : null,
-        icon ? h(RN.Image, { source: { uri: icon }, style: { width: 72, height: 72, borderRadius: 18, marginBottom: 10 } }) : null,
-        h(RN.Text, { style: { color: '#f2f3f5', fontSize: 21, fontWeight: '700', textAlign: 'center' } }, guild.name || 'Server Info'),
-        guild.description ? h(RN.Text, { style: { color: '#b5bac1', fontSize: 13, marginTop: 8, textAlign: 'center' } }, guild.description) : null
+  return h(ActionSheet, { style: { flex: 1, backgroundColor: panelColor } },
+    h(RN.View, { style: { flex: 1, minHeight: 0, backgroundColor: panelColor } },
+      h(RN.View, { style: { minHeight: 54, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: panelColor, borderBottomWidth: 0.5, borderBottomColor: lineColor } },
+        h(RN.Text, { style: { color: textColor, fontSize: 17, fontWeight: '700', flex: 1 } }, 'Server Information'),
+        ActionSheetCloseButton
+          ? h(ActionSheetCloseButton, { onPress: hideSheet })
+          : h(RN.TouchableOpacity, { onPress: hideSheet, hitSlop: { top: 12, bottom: 12, left: 12, right: 12 } }, h(RN.Text, { style: { color: '#00a8fc', fontSize: 15 } }, 'Close'))
       ),
-      h(RN.Text, { style: { color: '#949ba4', fontSize: 12, fontWeight: '700', marginTop: 8 } }, 'SERVER OVERVIEW'),
-      row('Members', guild.memberCount ?? guild.approximateMemberCount),
-      row('Roles', roleCount),
-      row('Channels', channelCount),
-      row('Boost level', guild.premiumTier ?? 0),
-      row('Boosts', guild.premiumSubscriberCount ?? 0),
-      h(RN.Text, { style: { color: '#949ba4', fontSize: 12, fontWeight: '700', marginTop: 20 } }, 'SERVER DETAILS'),
-      row('Owner ID', guild.ownerId),
-      row('Created', createdAt),
-      row('Vanity URL', guild.vanityURLCode ? 'discord.gg/' + guild.vanityURLCode : '—'),
-      row('Server ID', guildId),
-      h(RN.View, { style: { height: 20 } })
-    );
-  };
+      h(RN.ScrollView, { style: { flex: 1, backgroundColor: panelColor }, contentContainerStyle: { paddingBottom: 28 }, keyboardShouldPersistTaps: 'handled' },
+        banner ? h(RN.Image, { source: { uri: banner }, style: { width: '100%', height: 112, backgroundColor: '#202225' }, resizeMode: 'cover' }) : null,
+        h(RN.View, { style: { padding: 16, flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: panelColor } },
+          icon ? h(RN.Image, { source: { uri: icon }, style: { width: 64, height: 64, borderRadius: 16 } }) : null,
+          h(RN.View, { style: { flex: 1 } },
+            h(RN.Text, { style: { color: textColor, fontSize: 19, fontWeight: '700' } }, guild.name ?? 'Server'),
+            guild.description ? h(RN.Text, { style: { color: mutedColor, fontSize: 13, marginTop: 5 } }, guild.description) : null
+          )
+        ),
+        Section('OVERVIEW'),
+        InfoRow('Members', memberCount?.toLocaleString?.() ?? memberCount ?? '—'),
+        onlineCount != null ? InfoRow('Online', onlineCount.toLocaleString?.() ?? onlineCount) : null,
+        InfoRow('Friends in Server', friendsLoading ? 'Loading…' : friends.length + (friends.length === 1 ? ' friend' : ' friends')),
+        !friendsLoading && friends.length
+          ? h(RN.View, { style: { backgroundColor: panelColor } }, ...friends.map((friend) => {
+              const display = friend.nick || friend.globalName || friend.username;
+              const avatarHash = getStore('UserStore')?.getUser?.(friend.id)?.avatar;
+              const avatarUrl = avatarHash
+                ? 'https://cdn.discordapp.com/avatars/' + friend.id + '/' + avatarHash + '.' + (avatarHash.startsWith('a_') ? 'gif' : 'png') + '?size=64'
+                : 'https://cdn.discordapp.com/embed/avatars/0.png';
+              return InfoRow(display, '@' + friend.username, () => openProfile(friend.id, guildId), avatarUrl);
+            }))
+          : null,
+        InfoRow('Roles', Array.isArray(roles) ? roles.length : '—'),
+        InfoRow('Channels', channelCount ?? '—'),
+        InfoRow('Boost level', guild.premiumTier ?? guild.premium_tier ?? 0),
+        InfoRow('Boosts', guild.premiumSubscriberCount ?? guild.premium_subscription_count ?? 0),
+        Section('SERVER DETAILS'),
+        InfoRow('Owner', ownerName, ownerId ? () => openProfile(ownerId, guildId) : undefined, ownerAvatar),
+        InfoRow('Created', getCreatedDate(guildId)),
+        InfoRow('Vanity URL', guild.vanityURLCode ? 'discord.gg/' + guild.vanityURLCode : '—'),
+        InfoRow('Server ID', guildId)
+      )
+    )
+  );
 }
 
 export function start() {
-  const ContextMenus = metro.findByProps('showContextMenu', 'hideContextMenu');
+  const mod = metro.find((m: any) => m?.default?.name === 'getGuildsBarGuildMenuItems');
   const ActionSheets = metro.api.ActionSheets;
-  if (!ContextMenus || !ActionSheets) {
-    logger.warn('Server Info: Discord context menu or action sheets module was not found.');
+  if (!mod?.default || !ActionSheets?.openLazy) {
+    logger.warn('Server Info: guild menu or ActionSheet API was not found.');
     return;
   }
 
-  patcher.before(ContextMenus, 'showContextMenu', ({ args: [menu] }) => {
-    const guildId = typeof menu?.key === 'string' ? menu.key : undefined;
-    const guild = guildId ? flux.getStore('Guild')?.getGuild?.(guildId) : undefined;
-    if (!menu || !Array.isArray(menu.items) || !guildId || !guild) return;
-    if (menu.items.some((item: any) => item?.label === 'Server Info')) return;
-
-    menu.items.push({
+  patcher.after(mod, 'default', ({ args, result }: any) => {
+    const guildId = args?.[0] == null ? null : String(args[0]);
+    if (!guildId || !Array.isArray(result)) return result;
+    if (result.some((item: any) => item?.label === 'Server Info')) return result;
+    return [...result, {
       label: 'Server Info',
-      action: () => {
-        ActionSheets.openLazy(
-          Promise.resolve({ default: makeInfoSheet(guildId) }),
-          'server-info-' + guildId,
-          { guildId }
-        );
-      }
-    });
+      action: () => ActionSheets.openLazy(
+        Promise.resolve({ default: ServerInfoSheet }),
+        'server-info-actionsheet-' + guildId,
+        { guildId }
+      )
+    }];
   });
-
   logger.log('Server Info is ready.');
 }
