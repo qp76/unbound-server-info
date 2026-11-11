@@ -11,6 +11,7 @@
     "@types/react": "^19.1.0",
     "@unbound-app/api": "^1.0.0",
     "@unbound-app/cli": "^1.0.0",
+    "oxlint": "^1.14.0",
     "react-native": "^0.81.0",
     "typescript": "^5.9.0"
   }
