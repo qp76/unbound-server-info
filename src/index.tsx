@@ -32,11 +32,13 @@ function getCreatedDate(id: string) {
 function openProfile(userId: string, guildId: string) {
   try {
     hideSheet();
-    const profile = metro.findByProps('openUserProfileModal', 'openUserProfile')
-      ?? metro.findByProps('showUserProfile');
-    if (profile?.openUserProfileModal) profile.openUserProfileModal({ userId, guildId });
-    else if (profile?.openUserProfile) profile.openUserProfile({ userId, guildId });
-    else profile?.showUserProfile?.({ userId, guildId });
+    const profileModal = metro.findByProps('openUserProfileModal');
+    const profileAction = metro.findByProps('openUserProfile');
+    const legacyProfile = metro.findByProps('showUserProfile');
+    if (profileModal?.openUserProfileModal) profileModal.openUserProfileModal({ userId, guildId });
+    else if (profileAction?.openUserProfile) profileAction.openUserProfile({ userId, guildId });
+    else if (legacyProfile?.showUserProfile) legacyProfile.showUserProfile({ userId, guildId });
+    else logger.warn('Server Info: no user profile action was found.');
   } catch (error) {
     logger.warn('Server Info: could not open profile', error);
   }
