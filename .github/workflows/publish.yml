@@ -6,15 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
   contents: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: server-info-publish
+  cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -32,25 +31,24 @@ jobs:
       - name: Build addon
         run: bunx @unbound-app/cli build --json
 
-      - name: Prepare installable manifest folder
+      - name: Prepare installable plugin folder
         run: |
-          mkdir -p site
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const id = 'qp76.server-info';
-          const ignored = new Set(['.git', 'node_modules', '.bun', '.github']);
+          const ignored = new Set(['.git', 'node_modules', '.bun', '.github', 'site']);
           const found = [];
           function walk(dir) {
             for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
               if (ent.isDirectory()) {
                 if (!ignored.has(ent.name)) walk(path.join(dir, ent.name));
               } else if (ent.name === 'manifest.json') {
-                const file = path.join(dir, ent.name);
+                const folder = path.dirname(path.join(dir, ent.name));
                 try {
-                  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-                  if (manifest.id === id && fs.existsSync(path.join(dir, 'index.js'))) {
-                    found.push({ dir, manifest });
+                  const manifest = JSON.parse(fs.readFileSync(path.join(folder, ent.name), 'utf8'));
+                  if (manifest.id === id && fs.existsSync(path.join(folder, 'index.js'))) {
+                    found.push(folder);
                   }
                 } catch {}
               }
@@ -58,17 +56,20 @@ jobs:
           }
           walk('.');
           if (!found.length) {
-            console.error('Build output with manifest.json and index.js was not found.');
+            console.error('Could not find the built plugin folder containing manifest.json and index.js.');
             process.exit(1);
           }
-          const output = found[found.length - 1];
-          fs.cpSync(output.dir, 'site', { recursive: true });
-          console.log('Prepared install folder from ' + output.dir);
+          const output = found.find(p => p === 'dist') || found[0];
+          fs.rmSync('site', { recursive: true, force: true });
+          fs.mkdirSync('site', { recursive: true });
+          fs.cpSync(output, 'site', { recursive: true });
+          console.log('Prepared plugin files from ' + output);
           NODE
 
-      - name: Publish installable plugin files
+      - name: Publish plugin files to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
           publish_branch: gh-pages
+          force_orphan: true
