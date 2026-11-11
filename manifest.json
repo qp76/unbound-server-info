@@ -1,0 +1,12 @@
+{
+  "id": "qp76.server-info",
+  "name": "Server Info",
+  "description": "Shows detailed information about the Discord server you select.",
+  "authors": [
+    {
+      "name": "qp76"
+    }
+  ],
+  "version": "0.1.0",
+  "main": "index.tsx"
+}
