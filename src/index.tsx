@@ -117,6 +117,7 @@ function ServerInfoSheet({ guildId }: { guildId: string }) {
   const [friendsLoading, setFriendsLoading] = React.useState(true);
   const [, refresh] = React.useReducer((n: number) => n + 1, 0);
   const [ownerData, setOwnerData] = React.useState<any>(null);
+  const [guildDetails, setGuildDetails] = React.useState<any>(null);
 
   React.useEffect(() => {
     const names = ['GuildStore', 'Guild', 'GuildMemberStore', 'GuildRoleStore', 'GuildChannelStore', 'UserStore'];
@@ -135,6 +136,17 @@ function ServerInfoSheet({ guildId }: { guildId: string }) {
     loadGuildFriends(guildId).then((items) => {
       if (alive) { setFriends(items); setFriendsLoading(false); }
     }).catch(() => { if (alive) setFriendsLoading(false); });
+    return () => { alive = false; };
+  }, [guildId]);
+
+  React.useEffect(() => {
+    let alive = true;
+    const api = metro.findByProps('get', 'post', 'patch', 'del');
+    api?.get?.({ url: '/guilds/' + guildId + '?with_counts=true' })
+      .then((res: any) => {
+        if (alive && res?.body) setGuildDetails(res.body);
+      })
+      .catch((error: any) => logger.warn('Server Info: could not load server boost details', error));
     return () => { alive = false; };
   }, [guildId]);
 
@@ -170,6 +182,8 @@ function ServerInfoSheet({ guildId }: { guildId: string }) {
   const memberCount = memberCountStore?.getMemberCount?.(guildId) ?? guild.memberCount ?? guild.approximateMemberCount ?? memberStore?.getMemberIds?.(guildId)?.length;
   const onlineCount = countsStore?.getOnlineCount?.(guildId);
   const owner = ownerData ?? getStore('UserStore')?.getUser?.(ownerId);
+  const boostTier = guildDetails?.premium_tier ?? guildDetails?.premiumTier ?? guild?.premiumTier ?? guild?.premium_tier ?? 0;
+  const boostCount = guildDetails?.premium_subscription_count ?? guildDetails?.premiumSubscriptionCount ?? guild?.premiumSubscriptionCount ?? guild?.premium_subscription_count ?? guild?.premiumSubscriberCount;
   const ownerName = owner?.globalName ?? owner?.global_name ?? owner?.username ?? (ownerId ? 'User ' + ownerId.slice(0, 6) : 'Unavailable');
   const ownerAvatar = owner?.avatar && ownerId
     ? 'https://cdn.discordapp.com/avatars/' + ownerId + '/' + owner.avatar + '.' + (owner.avatar.startsWith('a_') ? 'gif' : 'png') + '?size=64'
@@ -210,8 +224,8 @@ function ServerInfoSheet({ guildId }: { guildId: string }) {
           : null,
         InfoRow('Roles', Array.isArray(roles) ? roles.length : '—'),
         InfoRow('Channels', channelCount ?? '—'),
-        InfoRow('Boost level', guild.premiumTier ?? guild.premium_tier ?? 0),
-        InfoRow('Boosts', guild.premiumSubscriberCount ?? guild.premium_subscription_count ?? 0),
+        InfoRow('Boost level', boostTier),
+        InfoRow('Boosts', boostCount == null ? 'Unavailable' : Number(boostCount).toLocaleString()),
         Section('SERVER DETAILS'),
         InfoRow('Owner', ownerName, ownerId ? () => openProfile(ownerId, guildId) : undefined, ownerAvatar),
         InfoRow('Created', getCreatedDate(guildId)),
@@ -234,8 +248,10 @@ export function start() {
     const guildId = args?.[0] == null ? null : String(args[0]);
     if (!guildId || !Array.isArray(result)) return result;
     if (result.some((item: any) => item?.label === 'Server Info')) return result;
+    const InfoIcon = metro.findByName('InfoIcon') ?? metro.findByName('CircleInformationIcon');
     return [...result, {
       label: 'Server Info',
+      icon: InfoIcon,
       action: () => ActionSheets.openLazy(
         Promise.resolve({ default: ServerInfoSheet }),
         'server-info-actionsheet-' + guildId,
