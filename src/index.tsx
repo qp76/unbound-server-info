@@ -270,18 +270,17 @@ export function start() {
     const guildId = args?.[0] == null ? null : String(args[0]);
     if (!guildId || !Array.isArray(result)) return result;
     if (result.some((item: any) => item?.label === 'Server Info')) return result;
-    const InfoIcon = metro.findByName('InfoIcon')
-      ?? metro.findByName('CircleInformationIcon')
-      ?? metro.findByName('InformationIcon');
-    // Some Unbound/Discord builds do not export the icon module. Keep a
-    // real component as a fallback so the native menu row never loses its icon.
+    // Do not use metro.findByName() here: on some Discord builds it returns
+    // a module object rather than a renderable React component. ContextMenuItem
+    // passes IconComponent directly to React.createElement, which crashes on it.
+    // Use a local component consistently across Unbound/Discord versions.
     const ServerInfoMenuIcon = (props: any) => h(RN.Text, {
       ...props,
       style: [{ color: props?.color ?? '#b5bac1', fontSize: props?.size ?? 20, fontWeight: '600', textAlign: 'center' }, props?.style]
     }, 'ⓘ');
     return [...result, {
       label: 'Server Info',
-      IconComponent: InfoIcon ?? ServerInfoMenuIcon,
+      IconComponent: ServerInfoMenuIcon,
       action: () => ActionSheets.openLazy(
         Promise.resolve({ default: ServerInfoSheet }),
         'server-info-actionsheet-' + guildId,
