@@ -45,16 +45,35 @@ function openProfile(userId: string, guildId: string) {
 }
 
 async function loadGuildFriends(guildId: string): Promise<Friend[]> {
-  const relationships = getStore('RelationshipStore');
+  const relationships = getStore('RelationshipStore') ?? metro.findByProps('getFriendIDs');
   const members = getStore('GuildMemberStore');
-  const users = getStore('UserStore');
-  // Use the actual Flux dispatcher shape; subscribing before requesting avoids
-  // missing a fast gateway response on mobile connections.
+  const users = getStore('UserStore') ?? metro.findByProps('getUser');
+  // Discord's member-by-ID action is not exposed consistently across builds.
+  // Keep the dispatcher fallback so the request still reaches the gateway.
   const dispatcher = metro.findByProps('dispatch', 'subscribe', 'unsubscribe')
     ?? metro.findByProps('dispatch', 'subscribe');
-  const actions = metro.findByProps('requestMembersById');
-  const ids: string[] = Array.from(new Set((relationships?.getFriendIDs?.() ?? []).map(String)));
+  const actions = metro.findByProps('requestMembers', 'requestMembersById')
+    ?? metro.findByProps('requestMembersById');
+  const rawFriendIds = relationships?.getFriendIDs?.() ?? [];
+  const ids: string[] = Array.from(new Set(Array.from(rawFriendIds as any).map((id: any) => String(id))));
   if (!ids.length) return [];
+  const requestBatch = (batch: string[]) => {
+    if (!batch.length) return;
+    try {
+      if (typeof actions?.requestMembersById === 'function') {
+        actions.requestMembersById(guildId, batch, false);
+      } else {
+        dispatcher?.dispatch?.({
+          type: 'GUILD_MEMBERS_REQUEST',
+          guildIds: [guildId],
+          userIds: batch,
+          presences: false
+        });
+      }
+    } catch (error) {
+      logger.warn('Server Info: member request failed', error);
+    }
+  };
 
   const received = new Map<string, any>();
   if (dispatcher?.subscribe && dispatcher?.unsubscribe) {
@@ -82,19 +101,25 @@ async function loadGuildFriends(guildId: string): Promise<Friend[]> {
       let timer: ReturnType<typeof setTimeout> = setTimeout(done, 2200);
       try {
         dispatcher.subscribe('GUILD_MEMBERS_CHUNK', onChunk);
-        actions?.requestMembersById?.(guildId, ids);
+        // Discord limits user_ids requests to 100 IDs per gateway request.
+        for (let i = 0; i < ids.length; i += 100) requestBatch(ids.slice(i, i + 100));
       } catch {
         done();
       }
     });
   } else {
-    try { actions?.requestMembersById?.(guildId, ids); } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    for (let i = 0; i < ids.length; i += 100) requestBatch(ids.slice(i, i + 100));
+    await new Promise((resolve) => setTimeout(resolve, 1400));
   }
 
   const guildMembers = members?.getMembers?.(guildId) ?? {};
+  const cachedMember = (id: string) => {
+    if (guildMembers instanceof Map) return guildMembers.get(id);
+    if (Array.isArray(guildMembers)) return guildMembers.find((entry: any) => String(entry?.userId ?? entry?.user?.id ?? entry?.id) === id);
+    return guildMembers?.[id];
+  };
   return ids.map((id) => {
-    const member = guildMembers[id] ?? members?.getMember?.(guildId, id) ?? received.get(id);
+    const member = cachedMember(id) ?? members?.getMember?.(guildId, id) ?? received.get(id);
     if (!member) return null;
     const user = users?.getUser?.(id) ?? member?.user;
     return {
@@ -274,10 +299,23 @@ export function start() {
     // a module object rather than a renderable React component. ContextMenuItem
     // passes IconComponent directly to React.createElement, which crashes on it.
     // Use a local component consistently across Unbound/Discord versions.
-    const ServerInfoMenuIcon = (props: any) => h(RN.Text, {
-      ...props,
-      style: [{ color: props?.color ?? '#b5bac1', fontSize: props?.size ?? 20, fontWeight: '600', textAlign: 'center' }, props?.style]
-    }, 'ⓘ');
+    const ServerInfoMenuIcon = (props: any) => h(RN.View, {
+      accessible: false,
+      pointerEvents: 'none',
+      style: {
+        width: 18, height: 18, borderRadius: 9,
+        borderWidth: 1.7, borderColor: props?.color ?? '#b5bac1',
+        alignItems: 'center', justifyContent: 'center',
+        marginRight: 1
+      }
+    }, h(RN.Text, {
+      style: {
+        color: props?.color ?? '#b5bac1',
+        fontSize: 12, lineHeight: 14, fontWeight: '700',
+        textAlign: 'center', includeFontPadding: false,
+        marginTop: -1
+      }
+    }, 'i'));
     return [...result, {
       label: 'Server Info',
       IconComponent: ServerInfoMenuIcon,
