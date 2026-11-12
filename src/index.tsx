@@ -48,12 +48,16 @@ async function loadGuildFriends(guildId: string): Promise<Friend[]> {
   const relationships = getStore('RelationshipStore');
   const members = getStore('GuildMemberStore');
   const users = getStore('UserStore');
-  const dispatcher = metro.findByProps('subscribe', 'unsubscribe');
+  // Use the actual Flux dispatcher shape; subscribing before requesting avoids
+  // missing a fast gateway response on mobile connections.
+  const dispatcher = metro.findByProps('dispatch', 'subscribe', 'unsubscribe')
+    ?? metro.findByProps('dispatch', 'subscribe');
   const actions = metro.findByProps('requestMembersById');
-  const ids: string[] = relationships?.getFriendIDs?.() ?? [];
+  const ids: string[] = Array.from(new Set((relationships?.getFriendIDs?.() ?? []).map(String)));
   if (!ids.length) return [];
 
-  try { actions?.requestMembersById?.(guildId, ids); } catch {}
+  const received = new Map<string, any>();
+  let sawChunk = false;
   if (dispatcher?.subscribe && dispatcher?.unsubscribe) {
     await new Promise<void>((resolve) => {
       let finished = false;
@@ -65,23 +69,41 @@ async function loadGuildFriends(guildId: string): Promise<Friend[]> {
         resolve();
       };
       const onChunk = (data: any) => {
-        if (data?.guildId === guildId || data?.guild_id === guildId) done();
+        const eventGuildId = String(data?.guildId ?? data?.guild_id ?? '');
+        if (eventGuildId !== guildId) return;
+        sawChunk = true;
+        const chunkMembers = Array.isArray(data?.members) ? data.members : [];
+        for (const entry of chunkMembers) {
+          const userId = String(entry?.user?.id ?? entry?.userId ?? entry?.user_id ?? '');
+          if (userId) received.set(userId, entry);
+        }
+        // Multiple chunks can arrive; wait briefly after each one for the rest.
+        clearTimeout(timer);
+        timer = setTimeout(done, 350);
       };
-      const timer = setTimeout(done, 1400);
-      try { dispatcher.subscribe('GUILD_MEMBERS_CHUNK', onChunk); } catch { done(); }
+      let timer: ReturnType<typeof setTimeout> = setTimeout(done, 2200);
+      try {
+        dispatcher.subscribe('GUILD_MEMBERS_CHUNK', onChunk);
+        actions?.requestMembersById?.(guildId, ids);
+      } catch {
+        done();
+      }
     });
+  } else {
+    try { actions?.requestMembersById?.(guildId, ids); } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 900));
   }
 
   const guildMembers = members?.getMembers?.(guildId) ?? {};
   return ids.map((id) => {
-    const member = guildMembers[id] ?? members?.getMember?.(guildId, id);
+    const member = guildMembers[id] ?? members?.getMember?.(guildId, id) ?? received.get(id);
     if (!member) return null;
-    const user = users?.getUser?.(id);
+    const user = users?.getUser?.(id) ?? member?.user;
     return {
       id,
       username: user?.username ?? 'Unknown user',
-      globalName: user?.globalName ?? null,
-      nick: member?.nick ?? null
+      globalName: user?.globalName ?? user?.global_name ?? null,
+      nick: member?.nick ?? member?.nickname ?? null
     };
   }).filter(Boolean) as Friend[];
 }
@@ -253,13 +275,15 @@ export function start() {
     const InfoIcon = metro.findByName('InfoIcon')
       ?? metro.findByName('CircleInformationIcon')
       ?? metro.findByName('InformationIcon');
-    // Discord's guild long-press menu uses IconComponent (not `icon`).
-    // Reuse a native menu icon as a guaranteed fallback if this client renamed InfoIcon.
-    const fallbackIcon = result.find((item: any) => /more options/i.test(String(item?.label)))?.IconComponent
-      ?? result.find((item: any) => item?.IconComponent)?.IconComponent;
+    // Some Unbound/Discord builds do not export the icon module. Keep a
+    // real component as a fallback so the native menu row never loses its icon.
+    const ServerInfoMenuIcon = (props: any) => h(RN.Text, {
+      ...props,
+      style: [{ color: props?.color ?? '#b5bac1', fontSize: props?.size ?? 20, fontWeight: '600', textAlign: 'center' }, props?.style]
+    }, 'ⓘ');
     return [...result, {
       label: 'Server Info',
-      IconComponent: InfoIcon ?? fallbackIcon,
+      IconComponent: InfoIcon ?? ServerInfoMenuIcon,
       action: () => ActionSheets.openLazy(
         Promise.resolve({ default: ServerInfoSheet }),
         'server-info-actionsheet-' + guildId,
