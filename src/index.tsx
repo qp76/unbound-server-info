@@ -57,7 +57,6 @@ async function loadGuildFriends(guildId: string): Promise<Friend[]> {
   if (!ids.length) return [];
 
   const received = new Map<string, any>();
-  let sawChunk = false;
   if (dispatcher?.subscribe && dispatcher?.unsubscribe) {
     await new Promise<void>((resolve) => {
       let finished = false;
@@ -71,7 +70,6 @@ async function loadGuildFriends(guildId: string): Promise<Friend[]> {
       const onChunk = (data: any) => {
         const eventGuildId = String(data?.guildId ?? data?.guild_id ?? '');
         if (eventGuildId !== guildId) return;
-        sawChunk = true;
         const chunkMembers = Array.isArray(data?.members) ? data.members : [];
         for (const entry of chunkMembers) {
           const userId = String(entry?.user?.id ?? entry?.userId ?? entry?.user_id ?? '');
